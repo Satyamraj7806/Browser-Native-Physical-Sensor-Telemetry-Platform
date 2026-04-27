@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT Surveillance Dashboard</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Leaflet for GPS map -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500&display=swap');
+:root {
+  --bg:#080b12; --s:#0e1117; --s2:#13171f; --b:#1c2235;
+  --a:#00e5ff; --g:#00ff88; --r:#ff3860; --y:#ffd600; --p:#b57bee;
+  --t:#c8d0e0; --d:#3d4a62;
+  --head:'Barlow Condensed',sans-serif; --body:'Barlow',sans-serif; --mono:'Share Tech Mono',monospace;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; background:var(--bg); color:var(--t); font-family:var(--body); font-size:14px; overflow-x:hidden; }
+
+/* scanlines */
+body::after { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px); pointer-events:none; z-index:9999; }
+
+/* TOPBAR */
+.topbar { display:flex; align-items:center; gap:14px; padding:12px 22px; border-bottom:1px solid var(--b); background:var(--s); position:sticky; top:0; z-index:100; }
+.topbar-title { font-family:var(--head); font-size:1.25rem; font-weight:800; letter-spacing:3px; text-transform:uppercase; color:var(--a); }
+.topbar-right { margin-left:auto; display:flex; align-items:center; gap:16px; }
+.clock { font-family:var(--mono); font-size:.72rem; color:var(--a); opacity:.7; }
+
+/* FALL ALERT BANNER */
+.fall-alert { display:none; position:fixed; top:52px; left:0; right:0; z-index:200; background:rgba(255,56,96,.18); border-bottom:2px solid var(--r); padding:10px; text-align:center; font-family:var(--mono); font-size:.8rem; color:var(--r); letter-spacing:2px; }
+.fall-alert.show { display:block; animation:fall-blink .5s ease 6; }
+@keyframes fall-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* LAYOUT */
+.layout { display:grid; grid-template-columns:240px 1fr; min-height:calc(100vh - 52px); }
+
+/* SIDEBAR */
+.sidebar { border-right:1px solid var(--b); background:var(--s); display:flex; flex-direction:column; overflow-y:auto; }
+.sb-sec { padding:14px; border-bottom:1px solid var(--b); }
+.sb-label { font-family:var(--mono); font-size:.58rem; letter-spacing:3px; color:var(--d); text-transform:uppercase; margin-bottom:8px; }
+
+/* Device list */
+.dev-list { display:flex; flex-direction:column; gap:5px; }
+.dev-item { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--b); border-radius:8px; cursor:pointer; transition:all .2s; background:var(--s2); }
+.dev-item:hover { border-color:var(--a); }
+.dev-item.active { border-color:var(--a); background:rgba(0,229,255,.05); }
+.dev-dot { width:7px; height:7px; border-radius:50%; background:var(--d); flex-shrink:0; }
+.dev-dot.on { background:var(--g); box-shadow:0 0 6px var(--g); animation:blink 2s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+.dev-name { font-family:var(--mono); font-size:.7rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dev-badge { font-family:var(--mono); font-size:.55rem; padding:2px 5px; border-radius:4px; white-space:nowrap; }
+.badge-idle { background:rgba(61,74,98,.2); color:var(--d); border:1px solid var(--d); }
+.badge-normal { background:rgba(0,229,255,.08); color:var(--a); border:1px solid rgba(0,229,255,.25); }
+.badge-high { background:rgba(255,56,96,.1); color:var(--r); border:1px solid rgba(255,56,96,.3); }
+
+/* Command buttons */
+.cmd-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.cmd-btn { padding:9px 5px; border:1px solid var(--b); border-radius:8px; background:var(--s2); font-family:var(--head); font-weight:600; font-size:.82rem; letter-spacing:1px; cursor:pointer; text-align:center; text-transform:uppercase; transition:all .18s; }
+.cmd-btn:active { transform:scale(.96); }
+.cmd-btn .i { display:block; font-size:1.1rem; margin-bottom:2px; }
+.cmd-btn .l { display:block; font-size:.58rem; letter-spacing:2px; }
+.c-y { --c:var(--y); } .c-r { --c:var(--r); } .c-p { --c:var(--p); } .c-a { --c:var(--a); }
+.cmd-btn { color:var(--c,var(--t)); border-color:color-mix(in srgb,var(--c,var(--d)) 25%,transparent); }
+.cmd-btn:hover { background:color-mix(in srgb,var(--c,var(--d)) 10%,transparent); border-color:var(--c,var(--d)); }
+.cmd-btn.sent { background:color-mix(in srgb,var(--c,var(--d)) 20%,transparent) !important; border-color:var(--c,var(--d)) !important; }
+
+/* Event log */
+.log-feed { background:var(--s2); border:1px solid var(--b); border-radius:8px; padding:8px; max-height:150px; overflow-y:auto; font-family:var(--mono); font-size:.62rem; color:var(--d); display:flex; flex-direction:column; gap:2px; }
+.le { color:var(--t); } .le.cmd{color:var(--a);} .le.ok{color:var(--g);} .le.warn{color:var(--y);} .le.err{color:var(--r);}
+
+/* MAIN GRID */
+.main { display:grid; grid-template-columns:1fr 1fr 1fr; grid-template-rows:auto auto auto auto; gap:1px; background:var(--b); overflow:auto; }
+.panel { background:var(--s); padding:16px 18px; }
+.pt { font-family:var(--mono); font-size:.58rem; letter-spacing:3px; text-transform:uppercase; color:var(--d); margin-bottom:12px; }
+
+/* Status panel */
+.status-row { display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+.status-dot { width:9px; height:9px; border-radius:50%; background:var(--d); flex-shrink:0; }
+.status-dot.on { background:var(--g); box-shadow:0 0 7px var(--g); animation:blink 2s infinite; }
+.meta { font-family:var(--mono); font-size:.65rem; color:var(--d); margin-top:4px; }
+.meta span { color:var(--t); }
+
+/* State label */
+.state-big { font-family:var(--head); font-size:2.2rem; font-weight:800; letter-spacing:3px; text-transform:uppercase; line-height:1; transition:color .3s; }
+.state-idle { color:var(--d); } .state-normal { color:var(--a); } .state-high { color:var(--r); }
+.state-evt { font-family:var(--mono); font-size:.65rem; color:var(--d); margin-top:7px; min-height:1em; }
+
+/* Battery bar */
+.batt-wrap { margin-top:8px; }
+.batt-track { width:100%; height:7px; background:var(--b); border-radius:4px; overflow:hidden; }
+.batt-fill { height:100%; border-radius:4px; transition:width .8s,background .8s; }
+
+/* Audio bar */
+.audio-track { width:100%; height:8px; background:var(--b); border-radius:4px; overflow:hidden; margin-top:7px; }
+.audio-fill { height:100%; border-radius:4px; background:var(--a); transition:width .1s; }
+
+/* Stats */
+.stat-row { display:flex; justify-content:space-between; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--b); }
+.stat-row:last-child { border-bottom:none; }
+.stat-l { font-family:var(--mono); font-size:.6rem; color:var(--d); letter-spacing:1px; }
+.stat-v { font-family:var(--mono); font-size:1rem; font-weight:700; }
+
+/* Axes */
+.ax-row { display:flex; gap:8px; }
+.ax-blk { flex:1; background:var(--s2); border:1px solid var(--b); border-radius:8px; padding:9px 6px; text-align:center; }
+.ax-n { font-family:var(--mono); font-size:.55rem; color:var(--d); letter-spacing:1px; }
+.ax-v { font-family:var(--mono); font-size:1.05rem; font-weight:700; margin-top:2px; transition:color .2s; }
+.ax-x .ax-v{color:#ff6b6b} .ax-y .ax-v{color:#51cf66} .ax-z .ax-v{color:#339af0}
+
+/* Chart panels */
+.chart-panel { grid-column:1/-1; padding:16px 18px; background:var(--s); }
+.chart-wrap { position:relative; height:180px; }
+.chart-tabs { display:flex; gap:8px; margin-bottom:10px; }
+.chart-tab { padding:4px 12px; border:1px solid var(--b); border-radius:6px; background:transparent; color:var(--d); font-family:var(--mono); font-size:.62rem; letter-spacing:1px; cursor:pointer; transition:all .18s; }
+.chart-tab.active { border-color:var(--a); color:var(--a); background:rgba(0,229,255,.06); }
+
+/* Map */
+.map-panel { grid-column:span 2; padding:16px 18px; background:var(--s); }
+#map { height:220px; border-radius:8px; overflow:hidden; border:1px solid var(--b); }
+.map-meta { display:flex; gap:16px; margin-top:8px; font-family:var(--mono); font-size:.65rem; color:var(--d); }
+.map-meta span { color:var(--t); }
+
+/* Camera */
+.cam-panel { padding:16px 18px; background:var(--s); }
+.photo-wrap { background:var(--s2); border:1px solid var(--b); border-radius:8px; overflow:hidden; min-height:140px; display:flex; align-items:center; justify-content:center; color:var(--d); font-family:var(--mono); font-size:.65rem; }
+.photo-wrap img { width:100%; height:auto; display:block; }
+
+/* GPS trail marker */
+.gps-trail { color:var(--a); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="topbar-title">⚡ IoT Surveillance</span>
+  <div class="topbar-right">
+    <span class="clock" id="clock">--:--:--</span>
+  </div>
+</div>
+
+<div class="fall-alert" id="fallAlert">⚠ FALL DETECTED</div>
+
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+
+    <div class="sb-sec">
+      <div class="sb-label">Active Nodes</div>
+      <div class="dev-list" id="devList">
+        <div style="font-family:var(--mono);font-size:.65rem;color:var(--d);text-align:center;padding:12px 0">No devices</div>
+      </div>
+      <button onclick="refreshDevices()" style="margin-top:8px;width:100%;padding:7px;border:1px solid var(--b);border-radius:6px;background:transparent;color:var(--d);font-family:var(--mono);font-size:.62rem;letter-spacing:2px;cursor:pointer;">↻ Refresh</button>
+    </div>
+
+    <div class="sb-sec">
+      <div class="sb-label">Commands</div>
+      <div class="cmd-grid">
+        <div class="cmd-btn c-y" onclick="sendCmd('torch_on')" id="cb-torch_on"><span class="i">🔦</span><span class="l">Torch On</span></div>
+        <div class="cmd-btn c-r" onclick="sendCmd('torch_off')" id="cb-torch_off"><span class="i">💡</span><span class="l">Torch Off</span></div>
+        <div class="cmd-btn c-p" onclick="sendCmd('vibrate')" id="cb-vibrate"><span class="i">📳</span><span class="l">Vibrate</span></div>
+        <div class="cmd-btn c-a" onclick="sendCmd('take_photo')" id="cb-take_photo"><span class="i">📸</span><span class="l">Photo</span></div>
+      </div>
+    </div>
+
+    <div class="sb-sec" style="flex:1">
+      <div class="sb-label">Event Log</div>
+      <div class="log-feed" id="logFeed"></div>
+    </div>
+
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- Status -->
+    <div class="panel">
+      <div class="pt">Node Status</div>
+      <div class="status-row">
+        <div class="status-dot" id="sDot"></div>
+        <span style="font-family:var(--mono);font-size:.8rem" id="sTxt">--</span>
+      </div>
+      <div class="meta">ID: <span id="sId">--</span></div>
+      <div class="meta">Seen: <span id="sSeen">--</span></div>
+    </div>
+
+    <!-- Movement -->
+    <div class="panel">
+      <div class="pt">Movement Detection</div>
+      <div class="state-big state-idle" id="stateBig">IDLE</div>
+      <div class="state-evt" id="stateEvt">No events</div>
+    </div>
+
+    <!-- Battery + Audio -->
+    <div class="panel">
+      <div class="pt">Device Sensors</div>
+      <div class="stat-row">
+        <span class="stat-l">BATTERY</span>
+        <span class="stat-v" id="battVal">--</span>
+      </div>
+      <div class="batt-wrap"><div class="batt-track"><div class="batt-fill" id="battFill" style="width:0%"></div></div></div>
+      <div class="stat-row" style="margin-top:10px">
+        <span class="stat-l">AUDIO RMS</span>
+        <span class="stat-v" id="audioVal">--</span>
+      </div>
+      <div class="audio-track"><div class="audio-fill" id="audioFill" style="width:0%"></div></div>
+    </div>
+
+    <!-- Axes -->
+    <div class="panel" style="grid-column:span 3">
+      <div class="pt">Raw Accelerometer Axes</div>
+      <div class="ax-row">
+        <div class="ax-blk ax-x"><div class="ax-n">X — ROLL</div><div class="ax-v" id="ax">0.00</div></div>
+        <div class="ax-blk ax-y"><div class="ax-n">Y — PITCH</div><div class="ax-v" id="ay">0.00</div></div>
+        <div class="ax-blk ax-z"><div class="ax-n">Z — YAW</div><div class="ax-v" id="az">0.00</div></div>
+      </div>
+    </div>
+
+    <!-- CHART: Motion + FFT tabs -->
+    <div class="chart-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="pt" style="margin-bottom:0">Signal Analysis</div>
+        <div class="chart-tabs">
+          <button class="chart-tab active" onclick="switchChart('time')" id="tab-time">Time Domain</button>
+          <button class="chart-tab" onclick="switchChart('fft')" id="tab-fft">FFT Spectrum</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+      <div id="fft-explain" style="display:none;margin-top:6px;font-family:var(--mono);font-size:.6rem;color:var(--d)">
+        Dominant freq: <span id="domFreq" style="color:var(--a)">--</span> Hz &nbsp;|&nbsp;
+        Motion type: <span id="motionType" style="color:var(--g)">--</span>
+      </div>
+    </div>
+
+    <!-- GPS Map -->
+    <div class="map-panel">
+      <div class="pt">Live GPS Map</div>
+      <div id="map"></div>
+      <div class="map-meta">
+        Lat: <span id="mLat">--</span>
+        &nbsp;Lng: <span id="mLng">--</span>
+        &nbsp;Speed: <span id="mSpd">--</span>
+        &nbsp;Acc: <span id="mAcc">--</span>
+      </div>
+    </div>
+
+    <!-- Camera -->
+    <div class="cam-panel">
+      <div class="pt">Camera Feed</div>
+      <div class="photo-wrap" id="photoWrap"><span>No photo yet</span></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CLOCK
+// ═══════════════════════════════════════════════════════════════
+setInterval(() => document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-GB"), 1000);
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+const socket = io();
+let selected = null;
+const devices = {}; // id → { acc, gps, battery, audio, state, last_seen, photo }
+
+// ═══════════════════════════════════════════════════════════════
+// LEAFLET MAP
+// ═══════════════════════════════════════════════════════════════
+const map = L.map("map", { zoomControl: true }).setView([20, 0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OSM", maxZoom: 19
+}).addTo(map);
+
+// Custom dark-ish tile feel via CSS
+document.querySelector("#map").style.filter = "invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9)";
+
+const markers = {};   // device_id → L.circleMarker
+const trails  = {};   // device_id → L.polyline (path history)
+const MAX_TRAIL = 50; // keep last 50 GPS points
+
+function updateMap(id, lat, lng) {
+  if (!markers[id]) {
+    markers[id] = L.circleMarker([lat, lng], {
+      radius: 8, fillColor: "#00e5ff", color: "#00ff88", weight: 2, fillOpacity: 0.9
+    }).addTo(map).bindPopup(id);
+    trails[id] = L.polyline([], { color: "#00e5ff", weight: 2, opacity: 0.5 }).addTo(map);
+  }
+  markers[id].setLatLng([lat, lng]);
+
+  const pts = trails[id].getLatLngs();
+  pts.push([lat, lng]);
+  if (pts.length > MAX_TRAIL) pts.shift();
+  trails[id].setLatLngs(pts);
+
+  // pan to selected device only
+  if (id === selected) map.panTo([lat, lng]);
+
+  // update meta row
+  document.getElementById("mLat").textContent = lat.toFixed(5);
+  document.getElementById("mLng").textContent = lng.toFixed(5);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIME-DOMAIN CHART  (rolling 60 pts)
+// ═══════════════════════════════════════════════════════════════
+const MAX_PTS = 60;
+const mkArr = () => Array(MAX_PTS).fill(null);
+const timeData = {
+  labels: Array(MAX_PTS).fill(""),
+  datasets: [
+    { label:"Magnitude", data:mkArr(), borderColor:"#00e5ff", backgroundColor:"rgba(0,229,255,.06)", borderWidth:2, pointRadius:0, tension:.4, fill:true },
+    { label:"X",         data:mkArr(), borderColor:"#ff6b6b", borderWidth:1.2, pointRadius:0, tension:.3, fill:false },
+    { label:"Y",         data:mkArr(), borderColor:"#51cf66", borderWidth:1.2, pointRadius:0, tension:.3, fill:false },
+    { label:"Z",         data:mkArr(), borderColor:"#339af0", borderWidth:1.2, pointRadius:0, tension:.3, fill:false }
+  ]
+};
+
+// ═══════════════════════════════════════════════════════════════
+// FFT CHART  (frequency bins)
+// ═══════════════════════════════════════════════════════════════
+// We collect the last N magnitude samples and compute DFT manually.
+// Sampling rate of phone motion events ≈ 60 Hz typically,
+// so with 128 samples we resolve 0–30 Hz, plenty for human motion.
+const FFT_N   = 128;
+const SAMPLE_HZ = 50; // approximate device motion rate
+const fftBuffer = [];  // rolling magnitude buffer fed by sensor stream
+
+const fftLabels = Array.from({length: FFT_N/2}, (_,i) => ((i * SAMPLE_HZ / FFT_N)).toFixed(1));
+const fftData = {
+  labels: fftLabels,
+  datasets: [{
+    label: "Power (dB)",
+    data: Array(FFT_N/2).fill(0),
+    borderColor: "#b57bee",
+    backgroundColor: "rgba(181,123,238,.15)",
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: .2,
+    fill: true
+  }]
+};
+
+// Simple DFT (Discrete Fourier Transform) — O(N²) is fine for N=128
+function computeDFT(signal) {
+  const N = signal.length;
+  const real = new Float32Array(N/2);
+  const imag = new Float32Array(N/2);
+  const power = new Float32Array(N/2);
+  for (let k = 0; k < N/2; k++) {
+    let re = 0, im = 0;
+    for (let n = 0; n < N; n++) {
+      const angle = (2 * Math.PI * k * n) / N;
+      re += signal[n] * Math.cos(angle);
+      im -= signal[n] * Math.sin(angle);
+    }
+    real[k] = re; imag[k] = im;
+    power[k] = Math.sqrt(re*re + im*im) / N;
+  }
+  return power;
+}
+
+// Classify motion from dominant frequency
+// 0–0.5 Hz → Static/Idle
+// 0.5–2 Hz → Walking
+// 2–4 Hz  → Running / Jogging
+// 4+ Hz   → Vibration / Vehicle
+function classifyMotion(domHz) {
+  if (domHz < 0.5) return "Static";
+  if (domHz < 2)   return "Walking";
+  if (domHz < 4)   return "Running";
+  return "Vibration";
+}
+
+// Chart instance
+let currentChart = "time";
+const chartCtx = document.getElementById("mainChart").getContext("2d");
+const chartOpts = (yLabel) => ({
+  responsive: true, maintainAspectRatio: false, animation: false,
+  plugins: { legend: { labels: { color:"#3d4a62", font:{family:"Share Tech Mono",size:10}, boxWidth:10 } } },
+  scales: {
+    x: { display: false },
+    y: { grid:{color:"rgba(28,34,53,.8)"}, ticks:{color:"#3d4a62",font:{family:"Share Tech Mono",size:9}}, title:{display:!!yLabel,text:yLabel,color:"#3d4a62",font:{size:9}} }
+  }
+});
+
+let chart = new Chart(chartCtx, { type:"line", data:timeData, options:chartOpts() });
+
+function switchChart(mode) {
+  currentChart = mode;
+  chart.destroy();
+  document.getElementById("tab-time").classList.toggle("active", mode==="time");
+  document.getElementById("tab-fft").classList.toggle("active", mode==="fft");
+  document.getElementById("fft-explain").style.display = mode==="fft" ? "block" : "none";
+  chart = new Chart(chartCtx, {
+    type: "line",
+    data: mode === "time" ? timeData : fftData,
+    options: chartOpts(mode === "fft" ? "Amplitude" : "")
+  });
+}
+
+function pushTimePoint(mag, x, y, z) {
+  [timeData.datasets[0].data, timeData.datasets[1].data,
+   timeData.datasets[2].data, timeData.datasets[3].data].forEach(d => d.shift());
+  timeData.labels.shift();
+  timeData.datasets[0].data.push(mag);
+  timeData.datasets[1].data.push(x);
+  timeData.datasets[2].data.push(y);
+  timeData.datasets[3].data.push(z);
+  timeData.labels.push("");
+  if (currentChart === "time") chart.update("none");
+}
+
+function pushFFT(mag) {
+  fftBuffer.push(mag);
+  if (fftBuffer.length > FFT_N) fftBuffer.shift();
+  if (fftBuffer.length < FFT_N) return; // wait until buffer is full
+
+  // Subtract mean (remove DC component)
+  const mean = fftBuffer.reduce((a,b) => a+b, 0) / FFT_N;
+  const signal = fftBuffer.map(v => v - mean);
+
+  const power = computeDFT(signal);
+
+  // Convert to dB for nicer display
+  const powerDb = Array.from(power).map(p => p > 0 ? 20 * Math.log10(p) : -60);
+  fftData.datasets[0].data = powerDb;
+
+  // Find dominant frequency (ignore DC bin 0)
+  let maxPow = -Infinity, maxBin = 1;
+  for (let k = 1; k < power.length; k++) {
+    if (power[k] > maxPow) { maxPow = power[k]; maxBin = k; }
+  }
+  const domHz = maxBin * SAMPLE_HZ / FFT_N;
+  document.getElementById("domFreq").textContent = domHz.toFixed(2);
+  document.getElementById("motionType").textContent = classifyMotion(domHz);
+
+  if (currentChart === "fft") chart.update("none");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEVICE LIST
+// ═══════════════════════════════════════════════════════════════
+function renderDevList() {
+  const list = document.getElementById("devList");
+  list.innerHTML = "";
+  const ids = Object.keys(devices);
+  if (!ids.length) {
+    list.innerHTML = '<div style="font-family:var(--mono);font-size:.65rem;color:var(--d);text-align:center;padding:12px 0">No devices</div>';
+    return;
+  }
+  ids.forEach(id => {
+    const d = devices[id];
+    const state = d.state || "Idle";
+    const badgeCls = state === "Idle" ? "badge-idle" : state === "High Activity" ? "badge-high" : "badge-normal";
+    const el = document.createElement("div");
+    el.className = "dev-item" + (id === selected ? " active" : "");
+    el.innerHTML = `<div class="dev-dot on"></div><div class="dev-name">${id}</div><div class="dev-badge ${badgeCls}">${state}</div>`;
+    el.onclick = () => selectDevice(id);
+    list.appendChild(el);
+  });
+}
+
+function selectDevice(id) {
+  selected = id;
+  addLog(`Selected: ${id}`, "cmd");
+  renderDevList();
+  if (devices[id]) repaint(devices[id]);
+}
+
+function refreshDevices() {
+  fetch("/devices").then(r=>r.json()).then(list => {
+    list.forEach(id => { if (!devices[id]) devices[id] = {}; });
+    renderDevList();
+  });
+}
+refreshDevices();
+
+// ═══════════════════════════════════════════════════════════════
+// LOG
+// ═══════════════════════════════════════════════════════════════
+function addLog(msg, cls="") {
+  const feed = document.getElementById("logFeed");
+  const el = document.createElement("div");
+  el.className = "le" + (cls ? " "+cls : "");
+  el.textContent = `[${new Date().toLocaleTimeString("en-GB")}] ${msg}`;
+  feed.prepend(el);
+  while (feed.children.length > 60) feed.removeChild(feed.lastChild);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REPAINT
+// ═══════════════════════════════════════════════════════════════
+function repaint(d) {
+  // status
+  document.getElementById("sDot").className = "status-dot on";
+  document.getElementById("sTxt").textContent = "ONLINE";
+  if (d.last_seen !== undefined) document.getElementById("sSeen").textContent = d.last_seen + "s ago";
+  if (d.id) document.getElementById("sId").textContent = d.id;
+
+  // movement state
+  if (d.state) {
+    const el = document.getElementById("stateBig");
+    el.textContent = d.state.toUpperCase();
+    el.className = "state-big " + (d.state==="Idle"?"state-idle":d.state==="High Activity"?"state-high":"state-normal");
+  }
+  if (d.event) document.getElementById("stateEvt").textContent = d.event;
+
+  // axes
+  if (d.x !== undefined) {
+    document.getElementById("ax").textContent = d.x.toFixed(2);
+    document.getElementById("ay").textContent = d.y.toFixed(2);
+    document.getElementById("az").textContent = d.z.toFixed(2);
+    pushTimePoint(d.magnitude||0, d.x, d.y, d.z);
+    pushFFT(d.magnitude||0);
+  }
+
+  // battery
+  if (d.battery) {
+    const pct = d.battery.level;
+    document.getElementById("battVal").textContent = pct + "%" + (d.battery.charging?" ⚡":"");
+    const fill = document.getElementById("battFill");
+    fill.style.width = pct + "%";
+    fill.style.background = pct>50?"var(--g)":pct>20?"var(--y)":"var(--r)";
+  }
+
+  // audio
+  if (d.audio !== undefined) {
+    document.getElementById("audioVal").textContent = d.audio.rms.toFixed(4);
+    document.getElementById("audioFill").style.width = d.audio.pct + "%";
+  }
+
+  // GPS
+  if (d.gps) {
+    const g = d.gps;
+    document.getElementById("mLat").textContent = g.lat.toFixed(5);
+    document.getElementById("mLng").textContent = g.lng.toFixed(5);
+    document.getElementById("mSpd").textContent = g.speed != null ? (g.speed*3.6).toFixed(1)+" km/h" : "--";
+    document.getElementById("mAcc").textContent = g.accuracy ? g.accuracy.toFixed(0)+"m" : "--";
+    updateMap(selected, g.lat, g.lng);
+  }
+
+  // photo
+  if (d.photo_base64) {
+    const wrap = document.getElementById("photoWrap");
+    wrap.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = "data:image/jpeg;base64," + d.photo_base64;
+    wrap.appendChild(img);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SOCKET EVENTS
+// ═══════════════════════════════════════════════════════════════
+socket.on("update_dashboard", data => {
+  const id = data.device_id;
+  if (!id) return;
+  if (!devices[id]) devices[id] = {};
+
+  const d = devices[id];
+  d.id = id;
+  if (data.status)        d.last_seen = data.status.last_seen;
+  if (data.accelerometer) Object.assign(d, { state:data.accelerometer.state, x:data.accelerometer.x, y:data.accelerometer.y, z:data.accelerometer.z, magnitude:data.accelerometer.magnitude, avg:data.accelerometer.avg, peak:data.accelerometer.peak });
+  if (data.gps)           d.gps = data.gps;
+  if (data.battery)       d.battery = data.battery;
+  if (data.audio_level)   d.audio = data.audio_level;
+  if (data.photo_base64)  d.photo_base64 = data.photo_base64;
+  if (data.event)         { d.event = data.event; addLog(`[${id}] ${data.event}`, data.fall_detected ? "err" : "ok"); }
+
+  // FALL ALERT
+  if (data.fall_detected) {
+    const banner = document.getElementById("fallAlert");
+    banner.textContent = `⚠ FALL DETECTED — Device: ${id}`;
+    banner.classList.add("show");
+    setTimeout(() => banner.classList.remove("show"), 6000);
+    addLog(`FALL DETECTED on ${id}`, "err");
+  }
+
+  renderDevList();
+  if (!selected) selectDevice(id);
+  if (selected === id) repaint(d);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SEND COMMAND
+// ═══════════════════════════════════════════════════════════════
+function sendCmd(cmd) {
+  if (!selected) { addLog("No device selected!", "err"); return; }
+  socket.emit("send_command", { device_id: selected, command: cmd });
+  addLog(`→ ${cmd} → ${selected}`, "cmd");
+  const btn = document.getElementById("cb-"+cmd);
+  if (btn) { btn.classList.add("sent"); setTimeout(()=>btn.classList.remove("sent"),400); }
+}
+</script>
+</body>
+</html>

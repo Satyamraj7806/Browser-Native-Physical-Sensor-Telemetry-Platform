@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+:root {
+  --bg: #0a0c10; --s: #111318; --b: #1e2330;
+  --a: #00e5ff; --g: #00ff88; --r: #ff3860; --y: #ffd600;
+  --t: #c8d0e0; --d: #4a5568;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--t);
+  font-family: 'Rajdhani', sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; padding: 18px 14px; gap: 10px;
+}
+body.shake { animation: shake .3s ease; }
+@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+@keyframes fall-pulse { 0%,100%{background:var(--bg)} 50%{background:#2a000d} }
+
+.hdr { display:flex; align-items:center; gap:10px; width:100%; max-width:440px; border-bottom:1px solid var(--b); padding-bottom:12px; }
+.hdr h2 { font-size:1.25rem; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:var(--a); }
+.dot { width:9px; height:9px; border-radius:50%; background:var(--d); flex-shrink:0; }
+.dot.on { background:var(--g); box-shadow:0 0 7px var(--g); animation:blink 2s infinite; }
+
+.card { width:100%; max-width:440px; background:var(--s); border:1px solid var(--b); border-radius:12px; padding:14px; }
+.ct { font-size:.6rem; letter-spacing:3px; text-transform:uppercase; color:var(--d); margin-bottom:10px; font-family:'Share Tech Mono',monospace; }
+.row { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:.85rem; color:var(--d); }
+.row:last-child { margin-bottom:0; }
+.v { color:var(--t); font-family:'Share Tech Mono',monospace; }
+.v.ok { color:var(--g); } .v.warn { color:var(--y); } .v.bad { color:var(--r); }
+
+/* axes */
+.axg { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+.ax { background:var(--bg); border:1px solid var(--b); border-radius:8px; padding:9px 6px; text-align:center; }
+.al { font-size:.58rem; letter-spacing:2px; color:var(--d); font-family:'Share Tech Mono',monospace; }
+.av { font-size:1.1rem; font-weight:700; font-family:'Share Tech Mono',monospace; margin-top:2px; }
+.ax-x .av{color:#ff6b6b} .ax-y .av{color:#51cf66} .ax-z .av{color:#339af0}
+
+/* battery */
+.batt-track { width:100%; height:8px; background:var(--b); border-radius:4px; margin-top:8px; overflow:hidden; }
+.batt-fill { height:100%; border-radius:4px; transition:width .8s,background .8s; }
+
+/* audio */
+.audio-track { width:100%; height:10px; background:var(--b); border-radius:5px; margin-top:8px; overflow:hidden; }
+.audio-fill { height:100%; border-radius:5px; background:var(--a); transition:width .08s; }
+
+/* fall */
+.fall-banner {
+  display:none; width:100%; max-width:440px;
+  background:rgba(255,56,96,.12); border:1px solid var(--r);
+  border-radius:10px; padding:11px; text-align:center;
+  font-family:'Share Tech Mono',monospace; font-size:.75rem; color:var(--r);
+}
+.fall-banner.show { display:block; }
+body.fall-flash { animation:fall-pulse .5s ease 4; }
+
+/* buttons */
+.br { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+button {
+  flex:1; min-width:68px; padding:9px 6px;
+  border:1px solid var(--b); border-radius:8px; background:transparent;
+  color:var(--t); font-family:'Rajdhani',sans-serif; font-weight:600;
+  font-size:.82rem; letter-spacing:1px; cursor:pointer; transition:all .18s; text-transform:uppercase;
+}
+button:hover { border-color:var(--a); color:var(--a); }
+button:active { transform:scale(.96); }
+button.go  { background:rgba(0,255,136,.08); border-color:var(--g); color:var(--g); }
+button.stp { background:rgba(255,56,96,.08); border-color:var(--r); color:var(--r); }
+
+.log { font-family:'Share Tech Mono',monospace; font-size:.7rem; color:var(--d); margin-top:8px; padding:8px; background:var(--bg); border-radius:6px; min-height:24px; border:1px solid var(--b); word-break:break-all; }
+.log.ok{color:var(--g)} .log.bad{color:var(--r)}
+</style>
+</head>
+<body>
+
+<div class="hdr"><div class="dot" id="dot"></div><h2>📱 Phone Node</h2></div>
+
+<div class="fall-banner" id="fallBanner">⚠ FALL DETECTED — sending alert</div>
+
+<!-- Identity -->
+<div class="card">
+  <div class="ct">Identity</div>
+  <div class="row"><span>Status</span><span class="v" id="status">Connecting…</span></div>
+  <div class="row"><span>Device ID</span><span class="v" id="devId">--</span></div>
+</div>
+
+<!-- Accelerometer -->
+<div class="card">
+  <div class="ct">Accelerometer</div>
+  <div class="axg">
+    <div class="ax ax-x"><div class="al">X</div><div class="av" id="sx">--</div></div>
+    <div class="ax ax-y"><div class="al">Y</div><div class="av" id="sy">--</div></div>
+    <div class="ax ax-z"><div class="al">Z</div><div class="av" id="sz">--</div></div>
+  </div>
+  <div class="br">
+    <button id="btnStart" onclick="startSensors()">▶ Start</button>
+    <button id="btnStop" class="stp" onclick="stopSensors()">■ Stop</button>
+  </div>
+</div>
+
+<!-- GPS -->
+<div class="card">
+  <div class="ct">GPS Location</div>
+  <div class="row"><span>Latitude</span><span class="v" id="lat">--</span></div>
+  <div class="row"><span>Longitude</span><span class="v" id="lng">--</span></div>
+  <div class="row"><span>Accuracy</span><span class="v" id="acc">--</span></div>
+  <div class="row"><span>Speed</span><span class="v" id="spd">--</span></div>
+  <div class="br">
+    <button id="btnGps" onclick="startGPS()">▶ GPS</button>
+    <button onclick="stopGPS()" class="stp">■ Stop</button>
+  </div>
+</div>
+
+<!-- Battery -->
+<div class="card">
+  <div class="ct">Battery</div>
+  <div class="row"><span>Level</span><span class="v" id="battLevel">--</span></div>
+  <div class="row"><span>Charging</span><span class="v" id="battCharging">--</span></div>
+  <div class="batt-track"><div class="batt-fill" id="battFill" style="width:0%"></div></div>
+</div>
+
+<!-- Audio Level -->
+<div class="card">
+  <div class="ct">Ambient Audio Level</div>
+  <div class="row"><span>RMS Level</span><span class="v" id="audioRms">--</span></div>
+  <div class="audio-track"><div class="audio-fill" id="audioFill" style="width:0%"></div></div>
+  <div class="br">
+    <button onclick="startAudio()">🎙 Listen</button>
+    <button onclick="stopAudio()" class="stp">■ Stop</button>
+  </div>
+</div>
+
+<!-- Commands log -->
+<div class="card">
+  <div class="ct">Command Log</div>
+  <div class="log" id="log">Waiting…</div>
+</div>
+
+<script>
+const socket = io();
+let deviceId = null;
+let torchStream = null;
+let motionHandler = null;
+let gpsWatchId = null;
+let audioCtx = null, audioSource = null, audioAnalyser = null, audioStream = null, audioRaf = null;
+
+// ── fall detection state ────────────────────────────────────────────────────
+const FALL_SPIKE   = 22;   // magnitude threshold for "impact"
+const FALL_STILL   = 3;    // magnitude below this = lying still after impact
+const FALL_WINDOW  = 800;  // ms — still must happen within this after spike
+let lastSpikeTime  = 0;
+let fallCooldown   = false;
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+function log(msg, cls = "") {
+  const el = document.getElementById("log");
+  el.textContent = msg;
+  el.className = "log" + (cls ? " " + cls : "");
+}
+
+// ── socket ──────────────────────────────────────────────────────────────────
+socket.on("connect", () => socket.emit("register", {}));
+
+socket.on("registered", d => {
+  deviceId = d.device_id;
+  document.getElementById("devId").textContent = deviceId;
+  document.getElementById("status").textContent = "Connected";
+  document.getElementById("dot").classList.add("on");
+  initBattery();
+});
+
+socket.on("disconnect", () => {
+  document.getElementById("status").textContent = "Disconnected";
+  document.getElementById("dot").classList.remove("on");
+});
+
+// ── COMMAND HANDLER ──────────────────────────────────────────────────────────
+socket.on("command", async data => {
+  const cmd = data.command;
+  log("CMD: " + cmd);
+
+  document.body.style.background = "#161a24";
+  setTimeout(() => document.body.style.background = "", 180);
+
+  if (cmd === "vibrate") {
+    if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
+    document.body.classList.add("shake");
+    setTimeout(() => document.body.classList.remove("shake"), 350);
+    log("Vibrated ✓", "ok");
+  }
+
+  if (cmd === "torch_on") {
+    try {
+      if (torchStream) torchStream.getTracks().forEach(t => t.stop());
+      torchStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      const track = torchStream.getVideoTracks()[0];
+      const cap = track.getCapabilities();
+      if (cap && cap.torch) {
+        await track.applyConstraints({ advanced: [{ torch: true }] });
+        log("Torch ON ✓", "ok");
+      } else {
+        log("Torch not supported on this device", "bad");
+      }
+    } catch (e) { log("Torch error: " + e.message, "bad"); }
+  }
+
+  if (cmd === "torch_off") {
+    try {
+      if (torchStream) {
+        const track = torchStream.getVideoTracks()[0];
+        if (track && track.getCapabilities().torch)
+          await track.applyConstraints({ advanced: [{ torch: false }] });
+        torchStream.getTracks().forEach(t => t.stop());
+        torchStream = null;
+      }
+      log("Torch OFF ✓", "ok");
+    } catch (e) { log("Torch off error: " + e.message, "bad"); }
+  }
+
+  if (cmd === "take_photo") {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.setAttribute("playsinline", true);
+      video.muted = true;
+      await new Promise((res, rej) => { video.onloadedmetadata = () => video.play().then(res).catch(rej); video.onerror = rej; });
+      await new Promise(res => setTimeout(res, 350));
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      stream.getTracks().forEach(t => t.stop());
+      socket.emit("sensor_data", { device_id: deviceId, photo_base64: canvas.toDataURL("image/jpeg", 0.75).split(",")[1] });
+      log("Photo sent ✓", "ok");
+    } catch (e) { log("Camera error: " + e.message, "bad"); }
+  }
+});
+
+// ── ACCELEROMETER + FALL DETECTION ──────────────────────────────────────────
+async function startSensors() {
+  if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+    try {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== "granted") { alert("Motion permission denied"); return; }
+    } catch (e) { alert("Permission error: " + e.message); return; }
+  }
+  if (motionHandler) return;
+
+  motionHandler = e => {
+    const a = e.accelerationIncludingGravity || {};
+    const x = a.x ?? 0, y = a.y ?? 0, z = a.z ?? 0;
+    const mag = Math.sqrt(x*x + y*y + z*z);
+
+    document.getElementById("sx").textContent = x.toFixed(2);
+    document.getElementById("sy").textContent = y.toFixed(2);
+    document.getElementById("sz").textContent = z.toFixed(2);
+
+    // ── Fall detection algorithm ──
+    // Step 1: spike (freefall or hard impact → high magnitude)
+    // Step 2: within FALL_WINDOW ms, device goes still (lying flat after fall)
+    if (!fallCooldown) {
+      if (mag > FALL_SPIKE) {
+        lastSpikeTime = Date.now();
+      } else if (lastSpikeTime && mag < FALL_STILL && (Date.now() - lastSpikeTime) < FALL_WINDOW) {
+        triggerFall();
+      }
+    }
+
+    socket.emit("sensor_data", { device_id: deviceId, accelerometer: { x, y, z } });
+  };
+
+  window.addEventListener("devicemotion", motionHandler);
+  document.getElementById("btnStart").classList.add("go");
+  log("Sensors streaming…", "ok");
+}
+
+function stopSensors() {
+  if (motionHandler) { window.removeEventListener("devicemotion", motionHandler); motionHandler = null; }
+  document.getElementById("btnStart").classList.remove("go");
+  log("Sensors stopped.");
+}
+
+function triggerFall() {
+  fallCooldown = true;
+  setTimeout(() => fallCooldown = false, 5000); // 5s cooldown
+
+  document.getElementById("fallBanner").classList.add("show");
+  document.body.classList.add("fall-flash");
+  setTimeout(() => {
+    document.getElementById("fallBanner").classList.remove("show");
+    document.body.classList.remove("fall-flash");
+  }, 4000);
+
+  if (navigator.vibrate) navigator.vibrate([400, 100, 400, 100, 400]);
+
+  socket.emit("sensor_data", {
+    device_id: deviceId,
+    fall_detected: true,
+    timestamp: Date.now()
+  });
+}
+
+// ── GPS ──────────────────────────────────────────────────────────────────────
+function startGPS() {
+  if (!navigator.geolocation) { log("GPS not available", "bad"); return; }
+
+  document.getElementById("btnGps").classList.add("go");
+
+  gpsWatchId = navigator.geolocation.watchPosition(pos => {
+    const { latitude, longitude, accuracy, speed } = pos.coords;
+    document.getElementById("lat").textContent = latitude.toFixed(6);
+    document.getElementById("lng").textContent = longitude.toFixed(6);
+    document.getElementById("acc").textContent = accuracy ? accuracy.toFixed(1) + " m" : "--";
+    document.getElementById("spd").textContent = speed != null ? (speed * 3.6).toFixed(1) + " km/h" : "0 km/h";
+
+    socket.emit("sensor_data", {
+      device_id: deviceId,
+      gps: { lat: latitude, lng: longitude, accuracy, speed: speed ?? 0, timestamp: pos.timestamp }
+    });
+  }, err => {
+    log("GPS error: " + err.message, "bad");
+  }, { enableHighAccuracy: true, maximumAge: 0 });
+}
+
+function stopGPS() {
+  if (gpsWatchId != null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+  document.getElementById("btnGps").classList.remove("go");
+}
+
+// ── BATTERY ──────────────────────────────────────────────────────────────────
+async function initBattery() {
+  if (!navigator.getBattery) return;
+  try {
+    const batt = await navigator.getBattery();
+    function updateBatt() {
+      const pct = Math.round(batt.level * 100);
+      const charging = batt.charging;
+      document.getElementById("battLevel").textContent = pct + "%";
+      document.getElementById("battCharging").textContent = charging ? "⚡ Yes" : "No";
+      const fill = document.getElementById("battFill");
+      fill.style.width = pct + "%";
+      fill.style.background = pct > 50 ? "var(--g)" : pct > 20 ? "var(--y)" : "var(--r)";
+      socket.emit("sensor_data", { device_id: deviceId, battery: { level: pct, charging } });
+    }
+    updateBatt();
+    batt.addEventListener("levelchange", updateBatt);
+    batt.addEventListener("chargingchange", updateBatt);
+  } catch (e) { /* Battery API not available */ }
+}
+
+// ── AUDIO LEVEL (RMS — no recording, just amplitude) ────────────────────────
+async function startAudio() {
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioSource = audioCtx.createMediaStreamSource(audioStream);
+    audioAnalyser = audioCtx.createAnalyser();
+    audioAnalyser.fftSize = 256;
+    audioSource.connect(audioAnalyser);
+
+    const buf = new Float32Array(audioAnalyser.fftSize);
+    let frameCount = 0;
+
+    function tick() {
+      audioRaf = requestAnimationFrame(tick);
+      audioAnalyser.getFloatTimeDomainData(buf);
+      let rms = 0;
+      for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+      rms = Math.sqrt(rms / buf.length);
+      const pct = Math.min(rms * 400, 100); // scale for display
+
+      document.getElementById("audioRms").textContent = rms.toFixed(4);
+      document.getElementById("audioFill").style.width = pct + "%";
+
+      // send every 10 frames (~6 Hz) to avoid flooding
+      if (++frameCount % 10 === 0) {
+        socket.emit("sensor_data", { device_id: deviceId, audio_level: { rms: parseFloat(rms.toFixed(4)), pct: Math.round(pct) } });
+      }
+    }
+    tick();
+    log("Audio listening…", "ok");
+  } catch (e) { log("Mic error: " + e.message, "bad"); }
+}
+
+function stopAudio() {
+  if (audioRaf) cancelAnimationFrame(audioRaf);
+  if (audioSource) audioSource.disconnect();
+  if (audioCtx) audioCtx.close();
+  if (audioStream) audioStream.getTracks().forEach(t => t.stop());
+  audioCtx = audioSource = audioAnalyser = audioStream = audioRaf = null;
+  document.getElementById("audioFill").style.width = "0%";
+  document.getElementById("audioRms").textContent = "--";
+  log("Audio stopped.");
+}
+</script>
+</body>
+</html>

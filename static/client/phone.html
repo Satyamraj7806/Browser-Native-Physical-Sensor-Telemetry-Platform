@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phone Client</title>
+</head>
+<body>
+<h2>Phone Client Connected</h2>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+    const socket = io("http://192.168.29.247:5000");  // PC IP
+
+    socket.on("connect", () => {
+        socket.emit("register_device", { id: "phone-1" });
+    });
+
+    socket.on("torch_on", () => {
+        navigator.mediaDevices.getUserMedia({ video: { torch: true } });
+    });
+
+    socket.on("torch_off", () => {
+        navigator.mediaDevices.getUserMedia({ video: { torch: false } });
+    });
+
+    socket.on("vibrate", () => {
+        navigator.vibrate([200]);
+    });
+
+    socket.on("take_photo", async () => {
+        alert("Photo capture not implemented yet.");
+    });
+</script>
+</body>
+</html>
